@@ -234,7 +234,11 @@ app.post('/webhook', async (req, res) => {
     if (aiMode === 'always_on') {
       isTimeActive = true; 
     } else if (aiMode === 'schedule') {
-      const currentHour = new Date().getHours();
+      // 스케줄 설정 모드
+      // ⭐️ 서버 환경과 무관하게 무조건 한국 시간(KST) 기준으로 시간(0~23)을 추출
+      const koreaTimeString = new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" });
+      const currentHour = new Date(koreaTimeString).getHours();
+      
       if (activeStartHour > activeEndHour) {
         isTimeActive = (currentHour >= activeStartHour || currentHour < activeEndHour);
       } else {
