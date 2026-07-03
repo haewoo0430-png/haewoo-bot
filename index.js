@@ -1,6 +1,7 @@
 const express = require('express');
 const { OpenAI } = require('openai');
-const basicAuth = require('express-basic-auth'); // 암호화 라이브러리
+const basicAuth = require('express-basic-auth');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
@@ -11,17 +12,22 @@ app.use(express.urlencoded({ extended: true }));
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const NAVER_AUTH_KEY = process.env.NAVER_AUTH_KEY;
 
-// ⭐️ 관리자 페이지 접속 암호 설정 (아이디: admin / 비밀번호: haewoo123!)
+// ⭐️ 관리자 정보 및 Supabase 클라이언트 초기화 (보안 강화)
+const ADMIN_ID = process.env.ADMIN_ID || 'admin';
+const ADMIN_PW = process.env.ADMIN_PW || 'haewoo123!'; // 가급적 .env에 ADMIN_PW를 설정하세요
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
+// ⭐️ 관리자 페이지 접속 암호 설정
 app.use('/admin', basicAuth({
-  users: { 'admin': 'haewoo123!' },
+  users: { [ADMIN_ID]: ADMIN_PW },
   challenge: true,
   unauthorizedResponse: '접근 권한이 없습니다.'
 }));
 
 // ==========================================
-// ⚙️ 관리자 설정 변수
+// ⚙️ 관리자 설정 변수 (기본값 세팅)
 // ==========================================
-let isAiActive = true; 
+let aiMode = 'schedule'; // 'always_on'(24시간 가동), 'schedule'(스케줄 작동), 'always_off'(완전 종료)
 let activeStartHour = 19; 
 let activeEndHour = 10;   
 
@@ -57,11 +63,31 @@ let currentPrompt = `[해우렌탈 AI 야간 상담사]
 - 정책에 없는 내용은 지어내지(할루시네이션) 말고, 모르는 것은 내일 매니저에게 연결한다고 하세요.
 - 답변은 항상 존댓말을 사용하세요.`;
 
-// ⭐️ 1차 방어: 악성 유저 차단용 카운터
-const userRequestCount = {};
+// ⭐️ Supabase DB에서 최신 데이터 가져오는 함수
+async function loadSettingsFromDB() {
+  try {
+    const { data, error } = await supabase
+      .from('bot_settings')
+      .select('*')
+      .eq('id', 1)
+      .single();
+
+    if (error) throw error;
+
+    if (data) {
+      aiMode = data.ai_mode || 'schedule';
+      activeStartHour = data.active_start_hour;
+      activeEndHour = data.active_end_hour;
+      currentPrompt = data.current_prompt;
+      console.log(`✅ Supabase 최신 설정 로드 완료 (현재 모드: ${aiMode})`);
+    }
+  } catch (err) {
+    console.error('❌ DB 로드 실패 (기본 하드코딩 값으로 작동):', err.message);
+  }
+}
 
 // ==========================================
-// 🎨 [관리자 페이지 라우터] (상담 내역 제거)
+// 🎨 [관리자 페이지 라우터] - 모바일 최적화 적용
 // ==========================================
 app.get('/admin', (req, res) => {
   const html = `
@@ -80,8 +106,8 @@ app.get('/admin', (req, res) => {
         .header { margin-bottom: 28px; }
         .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
         .header p { color: var(--text-secondary); margin-top: 6px; font-size: 15px; }
-        .section { background: var(--card-bg); border-radius: var(--border-radius); padding: 28px 24px; box-shadow: 0 2px 14px rgba(0,0,0,0.03); }
-        .section-title { font-size: 19px; font-weight: 700; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .section { background: var(--card-bg); border-radius: var(--border-radius); padding: 28px 24px; box-shadow: 0 2px 14px rgba(0,0,0,0.03); margin-bottom: 20px; }
+        .section-title { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: var(--text-primary); }
         .form-group { margin-bottom: 24px; }
         .form-label { display: block; font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
         input[type="number"], textarea { width: 100%; background: #f2f4f6; border: 1px solid transparent; border-radius: 12px; padding: 14px 16px; font-size: 15px; color: var(--text-primary); transition: all 0.2s ease; outline: none; }
@@ -91,12 +117,12 @@ app.get('/admin', (req, res) => {
         .time-wrap input { width: 60px; text-align: center; background: white; border: 1px solid #e5e8eb; padding: 8px; border-radius: 8px; }
         .btn-submit { width: 100%; background: var(--primary-color); color: white; border: none; border-radius: 14px; padding: 18px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
         .btn-submit:hover { background: #1b64da; }
-        .switch { position: relative; display: inline-block; width: 52px; height: 30px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e5e8eb; transition: .3s; border-radius: 30px; }
-        .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
-        input:checked + .slider { background-color: var(--primary-color); }
-        input:checked + .slider:before { transform: translateX(22px); }
+        
+        /* ⭐️ 모바일 친화적 라디오 버튼 스타일 */
+        .radio-group { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        .radio-label { display: flex; align-items: center; padding: 14px 16px; background: #f2f4f6; border-radius: 12px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s; font-weight: 600; font-size: 15px; }
+        .radio-label:has(input:checked) { background: #ffffff; border-color: var(--primary-color); box-shadow: 0 4px 12px rgba(49, 130, 246, 0.15); color: var(--primary-color); }
+        .radio-label input { display: none; }
       </style>
     </head>
     <body>
@@ -107,15 +133,26 @@ app.get('/admin', (req, res) => {
         </div>
         <form action="/admin/update" method="POST">
           <div class="section">
-            <div class="section-title">
-              상태 및 시간 설정
-              <label class="switch">
-                <input type="checkbox" name="isAiActiveToggle" ${isAiActive ? 'checked' : ''}>
-                <span class="slider"></span>
-              </label>
-            </div>
             <div class="form-group">
-              <label class="form-label">작동 시간 (시작 ~ 종료)</label>
+              <div class="section-title">🤖 AI 운영 모드 선택</div>
+              <div class="radio-group">
+                <label class="radio-label">
+                  <input type="radio" name="aiMode" value="always_on" ${aiMode === 'always_on' ? 'checked' : ''}>
+                  🟢 24시간 풀가동 (점심시간 / 바쁠 때)
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="aiMode" value="schedule" ${aiMode === 'schedule' ? 'checked' : ''}>
+                  🟡 스케줄 작동 (설정한 시간에만 작동)
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="aiMode" value="always_off" ${aiMode === 'always_off' ? 'checked' : ''}>
+                  🔴 완전 종료 (관리자 수동 대화 시)
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0; margin-top: 30px;">
+              <label class="form-label">스케줄 작동 시간 (시작 ~ 종료)</label>
               <div class="time-wrap">
                 <input type="number" name="activeStartHour" value="${activeStartHour}" min="0" max="23">
                 <span>시 부터</span>
@@ -123,11 +160,15 @@ app.get('/admin', (req, res) => {
                 <span>시 까지 작동</span>
               </div>
             </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">📝 AI 정책 프롬프트</div>
             <div class="form-group" style="margin-bottom: 0;">
-              <label class="form-label">AI 정책 프롬프트</label>
               <textarea name="promptText" spellcheck="false">${currentPrompt}</textarea>
             </div>
           </div>
+
           <button type="submit" class="btn-submit">변경사항 저장하기</button>
         </form>
       </div>
@@ -137,18 +178,35 @@ app.get('/admin', (req, res) => {
   res.send(html);
 });
 
-app.post('/admin/update', (req, res) => {
-  isAiActive = req.body.isAiActiveToggle === 'on'; 
+// ⭐️ 관리자 설정 변경 라우터 (DB 동기화)
+app.post('/admin/update', async (req, res) => {
+  aiMode = req.body.aiMode; 
   activeStartHour = parseInt(req.body.activeStartHour);
   activeEndHour = parseInt(req.body.activeEndHour);
   currentPrompt = req.body.promptText;
   
-  console.log(`⚙️ 관리자 설정 변경 (상태: ${isAiActive ? 'ON' : 'OFF'})`);
+  try {
+    const { error } = await supabase
+      .from('bot_settings')
+      .update({
+        ai_mode: aiMode,
+        active_start_hour: activeStartHour,
+        active_end_hour: activeEndHour,
+        current_prompt: currentPrompt
+      })
+      .eq('id', 1);
+
+    if (error) throw error;
+    console.log(`⚙️ 관리자 설정 변경 완료 (현재 모드: ${aiMode})`);
+  } catch (err) {
+    console.error('❌ Supabase DB 업데이트 실패:', err.message);
+  }
+
   res.redirect('/admin'); 
 });
 
 // ==========================================
-// 🤖 [네이버 톡톡 웹훅]
+// 🤖 [네이버 톡톡 웹훅] - 3단계 모드 적용
 // ==========================================
 app.post('/webhook', async (req, res) => {
   const event = req.body;
@@ -156,31 +214,44 @@ app.post('/webhook', async (req, res) => {
 
   if (event.event === 'send') {
     const userMessage = event.textContent.text; 
+    const inputType = event.textContent.inputType; 
     const userHash = event.user;
 
+    // 메뉴 버튼 클릭은 무시
+    if (inputType === 'button') {
+      console.log(`🔘 [버튼 클릭 감지] 톡톡챗봇 메뉴. AI 응대 무시.`);
+      return; 
+    }
+
+    // [참고] 실서버 오픈 시 아래 2줄은 삭제 또는 주석처리 해야 일반 고객 메시지에도 반응합니다.
     if (!userMessage.startsWith("!테스트")) return;
     const realMessage = userMessage.replace("!테스트 ", "");
 
-    if (!isAiActive) return; 
+    // ⭐️ 1단계: 수동 모드(완전 종료)일 경우 즉시 무시
+    if (aiMode === 'always_off') return; 
 
-    const currentHour = new Date().getHours();
+    // ⭐️ 2단계: 시간 조건 계산
     let isTimeActive = false;
     
-    if (activeStartHour > activeEndHour) {
-      isTimeActive = (currentHour >= activeStartHour || currentHour < activeEndHour);
-    } else {
-      isTimeActive = (currentHour >= activeStartHour && currentHour < activeEndHour);
+    if (aiMode === 'always_on') {
+      // 24시간 풀가동
+      isTimeActive = true; 
+    } else if (aiMode === 'schedule') {
+      // 스케줄 설정 모드
+      const currentHour = new Date().getHours();
+      if (activeStartHour > activeEndHour) {
+        // 자정을 넘기는 경우 (예: 19시 ~ 익일 10시)
+        isTimeActive = (currentHour >= activeStartHour || currentHour < activeEndHour);
+      } else {
+        // 당일 내의 시간인 경우 (예: 12시 ~ 14시)
+        isTimeActive = (currentHour >= activeStartHour && currentHour < activeEndHour);
+      }
     }
 
+    // 활성화된 시간/모드가 아니라면 무시
     if (!isTimeActive) return; 
 
-    // ⭐️ 1차 방어: 일일 질문 횟수 제한 (50회 이상 차단)
-    // userRequestCount[userHash] = (userRequestCount[userHash] || 0) + 1;
-    // if (userRequestCount[userHash] > 50) {
-    //   console.log(`🚨 [차단됨] 악용 의심 유저 감지: ${userHash}`);
-    //   return; 
-    // }
-
+    // ⭐️ 3단계: AI 답변 생성 및 네이버 전송
     try {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -191,7 +262,7 @@ app.post('/webhook', async (req, res) => {
       });
 
       const aiResponse = completion.choices[0].message.content;
-      console.log(`🤖 AI 응답: ${aiResponse}`);
+      console.log(`🤖 AI 응답 발송 완료 [모드: ${aiMode}]`);
 
       await fetch('https://gw.talk.naver.com/chatbot/v1/event', {
         method: 'POST',
@@ -207,12 +278,16 @@ app.post('/webhook', async (req, res) => {
       });
 
     } catch (error) {
-      console.error("오류 발생:", error);
+      console.error("❌ OpenAI 또는 네이버 API 통신 오류 발생:", error);
     }
   }
 });
 
-app.listen(3000, () => {
+// ⭐️ 서버 구동
+app.listen(3000, async () => {
+  console.log('==============================================');
   console.log('🚀 해우렌탈 최종 실전 서버 구동 중...');
-  console.log('👉 http://localhost:3000/admin (ID: admin / PW: haewoo123!)');
+  await loadSettingsFromDB(); 
+  console.log(`👉 http://localhost:3000/admin (ID: ${ADMIN_ID})`);
+  console.log('==============================================');
 });
