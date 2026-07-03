@@ -17,6 +17,9 @@ const ADMIN_ID = process.env.ADMIN_ID || 'admin';
 const ADMIN_PW = process.env.ADMIN_PW || 'haewoo123!'; // 가급적 .env에 ADMIN_PW를 설정하세요
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
+// 대화 기록 저장을 위한 객체 추가
+const chatMemory = {};
+
 // ⭐️ 관리자 페이지 접속 암호 설정
 app.use('/admin', basicAuth({
   users: { [ADMIN_ID]: ADMIN_PW },
@@ -217,52 +220,60 @@ app.post('/webhook', async (req, res) => {
     const inputType = event.textContent.inputType; 
     const userHash = event.user;
 
-    // 메뉴 버튼 클릭은 무시
     if (inputType === 'button') {
       console.log(`🔘 [버튼 클릭 감지] 톡톡챗봇 메뉴. AI 응대 무시.`);
       return; 
     }
 
-    // [참고] 실서버 오픈 시 아래 2줄은 삭제 또는 주석처리 해야 일반 고객 메시지에도 반응합니다.
     if (!userMessage.startsWith("!테스트")) return;
     const realMessage = userMessage.replace("!테스트 ", "");
 
-    // ⭐️ 1단계: 수동 모드(완전 종료)일 경우 즉시 무시
     if (aiMode === 'always_off') return; 
 
-    // ⭐️ 2단계: 시간 조건 계산
     let isTimeActive = false;
-    
     if (aiMode === 'always_on') {
-      // 24시간 풀가동
       isTimeActive = true; 
     } else if (aiMode === 'schedule') {
-      // 스케줄 설정 모드
       const currentHour = new Date().getHours();
       if (activeStartHour > activeEndHour) {
-        // 자정을 넘기는 경우 (예: 19시 ~ 익일 10시)
         isTimeActive = (currentHour >= activeStartHour || currentHour < activeEndHour);
       } else {
-        // 당일 내의 시간인 경우 (예: 12시 ~ 14시)
         isTimeActive = (currentHour >= activeStartHour && currentHour < activeEndHour);
       }
     }
 
-    // 활성화된 시간/모드가 아니라면 무시
     if (!isTimeActive) return; 
 
-    // ⭐️ 3단계: AI 답변 생성 및 네이버 전송
+    // ⭐️ [핵심 수정] 사용자별 대화 기록 배열 초기화
+    if (!chatMemory[userHash]) {
+      chatMemory[userHash] = []; 
+    }
+
+    // 사용자의 새 메시지를 기억에 추가
+    chatMemory[userHash].push({ role: "user", content: realMessage });
+
+    // 토큰 비용 절약 및 과부하 방지를 위해 최근 대화 6개(질문3+답변3)만 유지
+    if (chatMemory[userHash].length > 6) {
+      chatMemory[userHash].shift();
+    }
+
     try {
+      // ⭐️ [핵심 수정] system 프롬프트 + 이전 대화 기록을 통째로 OpenAI에 전달
+      const messagesToSend = [
+        { role: "system", content: currentPrompt },
+        ...chatMemory[userHash] 
+      ];
+
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: currentPrompt }, 
-          { role: "user", content: realMessage }
-        ],
+        messages: messagesToSend,
       });
 
       const aiResponse = completion.choices[0].message.content;
       console.log(`🤖 AI 응답 발송 완료 [모드: ${aiMode}]`);
+
+      // ⭐️ AI의 답변도 다음 문맥 파악을 위해 기억에 추가
+      chatMemory[userHash].push({ role: "assistant", content: aiResponse });
 
       await fetch('https://gw.talk.naver.com/chatbot/v1/event', {
         method: 'POST',
