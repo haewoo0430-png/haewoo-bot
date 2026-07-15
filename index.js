@@ -1,4 +1,3 @@
-javascript
 const express = require('express');
 const { OpenAI } = require('openai');
 const basicAuth = require('express-basic-auth');
