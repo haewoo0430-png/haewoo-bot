@@ -1,3 +1,4 @@
+javascript
 const express = require('express');
 const { OpenAI } = require('openai');
 const basicAuth = require('express-basic-auth');
@@ -30,9 +31,9 @@ app.use('/admin', basicAuth({
 // ==========================================
 // ⚙️ 관리자 설정 변수 (기본값 세팅)
 // ==========================================
-let aiMode = 'schedule'; // 'always_on'(24시간 가동), 'schedule'(스케줄 작동), 'always_off'(완전 종료)
-let activeStartHour = 19; 
-let activeEndHour = 10;   
+let aiMode = 'off'; // 'on'(영업 외 시간 AI 가동), 'off'(수동 응대)
+let activeStartHour = 19; // DB 호환용 유지 (사용 안 함)
+let activeEndHour = 10;   // DB 호환용 유지 (사용 안 함)
 
 let currentPrompt = `[해우렌탈 AI 야간 상담사]
 당신은 '해우렌탈(해우카메라)'의 AI 야간 상담사입니다. 고객에게 항상 친절하게 [해우카메라 AI 상담사]임을 밝히며 인사를 시작하고, 아래의 [사내 정책]을 완벽하게 숙지하여 답변하세요.
@@ -78,7 +79,7 @@ async function loadSettingsFromDB() {
     if (error) throw error;
 
     if (data) {
-      aiMode = data.ai_mode || 'schedule';
+      aiMode = data.ai_mode || 'off';
       activeStartHour = data.active_start_hour;
       activeEndHour = data.active_end_hour;
       currentPrompt = data.current_prompt;
@@ -90,7 +91,7 @@ async function loadSettingsFromDB() {
 }
 
 // ==========================================
-// 🎨 [관리자 페이지 라우터] - 모바일 최적화 적용
+// 🎨 [관리자 페이지 라우터] - 모바일 최적화 및 토글 적용
 // ==========================================
 app.get('/admin', (req, res) => {
   const html = `
@@ -98,34 +99,35 @@ app.get('/admin', (req, res) => {
     <html lang="ko">
     <head>
       <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
       <title>해우렌탈 AI 관리자</title>
       <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
       <style>
-        :root { --bg-color: #f2f4f6; --card-bg: #ffffff; --text-primary: #191f28; --text-secondary: #8b95a1; --primary-color: #3182f6; --border-radius: 16px; }
+        :root { --bg-color: #f2f4f6; --card-bg: #ffffff; --text-primary: #191f28; --text-secondary: #8b95a1; --primary-color: #03c75a; --border-radius: 16px; }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard Variable', sans-serif; }
-        body { background-color: var(--bg-color); color: var(--text-primary); -webkit-font-smoothing: antialiased; display: flex; justify-content: center; padding: 40px 20px; }
+        body { background-color: var(--bg-color); color: var(--text-primary); -webkit-font-smoothing: antialiased; display: flex; justify-content: center; padding: 20px; }
         .container { width: 100%; max-width: 600px; }
-        .header { margin-bottom: 28px; }
-        .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
-        .header p { color: var(--text-secondary); margin-top: 6px; font-size: 15px; }
-        .section { background: var(--card-bg); border-radius: var(--border-radius); padding: 28px 24px; box-shadow: 0 2px 14px rgba(0,0,0,0.03); margin-bottom: 20px; }
-        .section-title { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: var(--text-primary); }
-        .form-group { margin-bottom: 24px; }
-        .form-label { display: block; font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
-        input[type="number"], textarea { width: 100%; background: #f2f4f6; border: 1px solid transparent; border-radius: 12px; padding: 14px 16px; font-size: 15px; color: var(--text-primary); transition: all 0.2s ease; outline: none; }
-        input[type="number"]:focus, textarea:focus { background: #ffffff; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(49, 130, 246, 0.1); }
-        textarea { height: 320px; resize: vertical; line-height: 1.6; }
-        .time-wrap { display: flex; align-items: center; gap: 12px; background: #f2f4f6; padding: 12px 16px; border-radius: 12px; }
-        .time-wrap input { width: 60px; text-align: center; background: white; border: 1px solid #e5e8eb; padding: 8px; border-radius: 8px; }
-        .btn-submit { width: 100%; background: var(--primary-color); color: white; border: none; border-radius: 14px; padding: 18px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
-        .btn-submit:hover { background: #1b64da; }
+        .header { margin-bottom: 24px; margin-top: 20px; text-align: center; }
+        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+        .header p { color: var(--text-secondary); margin-top: 6px; font-size: 14px; }
+        .section { background: var(--card-bg); border-radius: var(--border-radius); padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); margin-bottom: 20px; }
+        .section-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; color: var(--text-primary); }
+        .form-group { margin-bottom: 0; }
+        textarea { width: 100%; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px; font-size: 14px; color: var(--text-primary); transition: all 0.2s ease; outline: none; height: 350px; resize: vertical; line-height: 1.6; }
+        textarea:focus { background: #ffffff; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(3, 199, 90, 0.1); }
+        .btn-submit { width: 100%; background: var(--primary-color); color: white; border: none; border-radius: 14px; padding: 18px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; margin-bottom: 30px; }
+        .btn-submit:active { background: #02b350; transform: scale(0.98); }
         
-        /* ⭐️ 모바일 친화적 라디오 버튼 스타일 */
-        .radio-group { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-        .radio-label { display: flex; align-items: center; padding: 14px 16px; background: #f2f4f6; border-radius: 12px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s; font-weight: 600; font-size: 15px; }
-        .radio-label:has(input:checked) { background: #ffffff; border-color: var(--primary-color); box-shadow: 0 4px 12px rgba(49, 130, 246, 0.15); color: var(--primary-color); }
-        .radio-label input { display: none; }
+        /* ⭐️ 모바일 친화적 토글 스위치 디자인 */
+        .toggle-container { display: flex; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 16px; border-radius: 12px; }
+        .toggle-text strong { display: block; font-size: 15px; margin-bottom: 4px; color: #222; }
+        .toggle-text span { font-size: 12px; color: var(--text-secondary); }
+        .switch { position: relative; display: inline-block; width: 56px; height: 32px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #d1d1d6; transition: .3s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 24px; width: 24px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        input:checked + .slider { background-color: var(--primary-color); }
+        input:checked + .slider:before { transform: translateX(24px); }
       </style>
     </head>
     <body>
@@ -135,39 +137,24 @@ app.get('/admin', (req, res) => {
           <p>해우렌탈 스마트 자동응답 시스템 설정</p>
         </div>
         <form action="/admin/update" method="POST">
+          
           <div class="section">
-            <div class="form-group">
-              <div class="section-title">🤖 AI 운영 모드 선택</div>
-              <div class="radio-group">
-                <label class="radio-label">
-                  <input type="radio" name="aiMode" value="always_on" ${aiMode === 'always_on' ? 'checked' : ''}>
-                  🟢 24시간 풀가동 (점심시간 / 바쁠 때)
-                </label>
-                <label class="radio-label">
-                  <input type="radio" name="aiMode" value="schedule" ${aiMode === 'schedule' ? 'checked' : ''}>
-                  🟡 스케줄 작동 (설정한 시간에만 작동)
-                </label>
-                <label class="radio-label">
-                  <input type="radio" name="aiMode" value="always_off" ${aiMode === 'always_off' ? 'checked' : ''}>
-                  🔴 완전 종료 (관리자 수동 대화 시)
-                </label>
+            <div class="section-title">🤖 AI 운영 상태</div>
+            <div class="toggle-container">
+              <div class="toggle-text">
+                <strong>AI 자동응답 켜기</strong>
+                <span>ON: 영업시간 외 AI 응대 / OFF: 수동 응대</span>
               </div>
-            </div>
-
-            <div class="form-group" style="margin-bottom: 0; margin-top: 30px;">
-              <label class="form-label">스케줄 작동 시간 (시작 ~ 종료)</label>
-              <div class="time-wrap">
-                <input type="number" name="activeStartHour" value="${activeStartHour}" min="0" max="23">
-                <span>시 부터</span>
-                <input type="number" name="activeEndHour" value="${activeEndHour}" min="0" max="23">
-                <span>시 까지 작동</span>
-              </div>
+              <label class="switch">
+                <input type="checkbox" name="aiModeToggle" value="on" ${aiMode === 'on' ? 'checked' : ''}>
+                <span class="slider"></span>
+              </label>
             </div>
           </div>
 
           <div class="section">
             <div class="section-title">📝 AI 정책 프롬프트</div>
-            <div class="form-group" style="margin-bottom: 0;">
+            <div class="form-group">
               <textarea name="promptText" spellcheck="false">${currentPrompt}</textarea>
             </div>
           </div>
@@ -183,9 +170,8 @@ app.get('/admin', (req, res) => {
 
 // ⭐️ 관리자 설정 변경 라우터 (DB 동기화)
 app.post('/admin/update', async (req, res) => {
-  aiMode = req.body.aiMode; 
-  activeStartHour = parseInt(req.body.activeStartHour);
-  activeEndHour = parseInt(req.body.activeEndHour);
+  // 체크박스가 ON이면 'on' 반환, 해제되어 있으면 undefined이므로 'off' 처리
+  aiMode = req.body.aiModeToggle === 'on' ? 'on' : 'off';
   currentPrompt = req.body.promptText;
   
   try {
@@ -193,8 +179,6 @@ app.post('/admin/update', async (req, res) => {
       .from('bot_settings')
       .update({
         ai_mode: aiMode,
-        active_start_hour: activeStartHour,
-        active_end_hour: activeEndHour,
         current_prompt: currentPrompt
       })
       .eq('id', 1);
@@ -209,7 +193,7 @@ app.post('/admin/update', async (req, res) => {
 });
 
 // ==========================================
-// 🤖 [네이버 톡톡 웹훅] - 3단계 모드 적용
+// 🤖 [네이버 톡톡 웹훅] - 실전 도입 버전 (!테스트 제거, ON/OFF 적용)
 // ==========================================
 app.post('/webhook', async (req, res) => {
   const event = req.body;
@@ -220,49 +204,35 @@ app.post('/webhook', async (req, res) => {
     const inputType = event.textContent.inputType; 
     const userHash = event.user;
 
+    // 버튼 클릭 시 AI 무시
     if (inputType === 'button') {
       console.log(`🔘 [버튼 클릭 감지] 톡톡챗봇 메뉴. AI 응대 무시.`);
       return; 
     }
 
-    if (!userMessage.startsWith("!테스트")) return;
-    const realMessage = userMessage.replace("!테스트 ", "");
+    // ⭐️ [수정] '!테스트' 검사 로직 삭제 -> 모든 고객 메시지 수신
+    const realMessage = userMessage; 
 
-    if (aiMode === 'always_off') return; 
-
-    let isTimeActive = false;
-    if (aiMode === 'always_on') {
-      isTimeActive = true; 
-    } else if (aiMode === 'schedule') {
-      // 스케줄 설정 모드
-      // ⭐️ 서버 환경과 무관하게 무조건 한국 시간(KST) 기준으로 시간(0~23)을 추출
-      const koreaTimeString = new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" });
-      const currentHour = new Date(koreaTimeString).getHours();
-      
-      if (activeStartHour > activeEndHour) {
-        isTimeActive = (currentHour >= activeStartHour || currentHour < activeEndHour);
-      } else {
-        isTimeActive = (currentHour >= activeStartHour && currentHour < activeEndHour);
-      }
+    // ⭐️ [수정] 심플 ON/OFF 로직
+    // aiMode가 'on'일 때만 작동 (영업시간 외 AI 응대 모드)
+    // 'off'일 때는 아무것도 하지 않음 (관리자 수동 응대 모드)
+    if (aiMode !== 'on') {
+      console.log(`⏸️ AI 모드 OFF 상태. 응답 무시.`);
+      return; 
     }
 
-    if (!isTimeActive) return; 
-
-    // ⭐️ [핵심 수정] 사용자별 대화 기록 배열 초기화
+    // --- 대화 기억(Memory) 로직 ---
     if (!chatMemory[userHash]) {
       chatMemory[userHash] = []; 
     }
 
-    // 사용자의 새 메시지를 기억에 추가
     chatMemory[userHash].push({ role: "user", content: realMessage });
 
-    // 토큰 비용 절약 및 과부하 방지를 위해 최근 대화 6개(질문3+답변3)만 유지
     if (chatMemory[userHash].length > 6) {
       chatMemory[userHash].shift();
     }
 
     try {
-      // ⭐️ [핵심 수정] system 프롬프트 + 이전 대화 기록을 통째로 OpenAI에 전달
       const messagesToSend = [
         { role: "system", content: currentPrompt },
         ...chatMemory[userHash] 
@@ -274,9 +244,8 @@ app.post('/webhook', async (req, res) => {
       });
 
       const aiResponse = completion.choices[0].message.content;
-      console.log(`🤖 AI 응답 발송 완료 [모드: ${aiMode}]`);
+      console.log(`🤖 AI 응답 발송 완료 [고객 해시: ${userHash}]`);
 
-      // ⭐️ AI의 답변도 다음 문맥 파악을 위해 기억에 추가
       chatMemory[userHash].push({ role: "assistant", content: aiResponse });
 
       await fetch('https://gw.talk.naver.com/chatbot/v1/event', {
