@@ -1,36 +1,31 @@
 const express = require('express');
 const { OpenAI } = require('openai');
-const basicAuth = require('express-basic-auth');
+const cookieParser = require('cookie-parser'); // ⭐️ 자동 로그인을 위한 쿠키 파서 추가
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser()); // 쿠키 미들웨어 적용
 
 // ⭐️ 환경변수(.env)에서 API 키를 안전하게 불러옵니다.
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const NAVER_AUTH_KEY = process.env.NAVER_AUTH_KEY;
 
-// ⭐️ 관리자 정보 및 Supabase 클라이언트 초기화 (보안 강화)
-const ADMIN_ID = process.env.ADMIN_ID || 'admin';
-const ADMIN_PW = process.env.ADMIN_PW || 'haewoo123!'; // 가급적 .env에 ADMIN_PW를 설정하세요
+// ⭐️ 관리자 정보 (요청하신 아이디/비밀번호로 업데이트)
+const ADMIN_ID = process.env.ADMIN_ID || 'haewoo';
+const ADMIN_PW = process.env.ADMIN_PW || 'haewoo12!';
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 // 대화 기록 저장을 위한 객체 추가
 const chatMemory = {};
 
-// ⭐️ 관리자 페이지 접속 암호 설정
-app.use('/admin', basicAuth({
-  users: { [ADMIN_ID]: ADMIN_PW },
-  challenge: true,
-  unauthorizedResponse: '접근 권한이 없습니다.'
-}));
-
 // ==========================================
 // ⚙️ 관리자 설정 변수 (기본값 세팅)
 // ==========================================
 let aiMode = 'off'; // 'on'(영업 외 시간 AI 가동), 'off'(수동 응대)
+let testMode = 'off'; // ⭐️ 테스트 모드 변수 추가 ('on'일 경우 !테스트만 응답)
 let activeStartHour = 19; // DB 호환용 유지 (사용 안 함)
 let activeEndHour = 10;   // DB 호환용 유지 (사용 안 함)
 
@@ -124,10 +119,11 @@ async function loadSettingsFromDB() {
 
     if (data) {
       aiMode = data.ai_mode || 'off';
+      testMode = data.test_mode || 'off'; // DB에서 테스트 모드도 불러옴
       activeStartHour = data.active_start_hour;
       activeEndHour = data.active_end_hour;
       currentPrompt = data.current_prompt;
-      console.log(`✅ Supabase 최신 설정 로드 완료 (현재 모드: ${aiMode})`);
+      console.log(`✅ Supabase 최신 설정 로드 완료 (현재 모드: ${aiMode} / 테스트: ${testMode})`);
     }
   } catch (err) {
     console.error('❌ DB 로드 실패 (기본 하드코딩 값으로 작동):', err.message);
@@ -135,9 +131,88 @@ async function loadSettingsFromDB() {
 }
 
 // ==========================================
-// 🎨 [관리자 페이지 라우터] - 모바일 최적화 및 토글 적용
+// 🔐 [보안 미들웨어] - 전용 로그인 및 세션(쿠키) 관리
 // ==========================================
-app.get('/admin', (req, res) => {
+// 관리자 페이지에 접근할 때 로그인이 되어있는지 확인하는 방어막
+function requireAuth(req, res, next) {
+  if (req.cookies.auth_token === 'authenticated') {
+    return next();
+  }
+  res.redirect('/admin/login');
+}
+
+// 🔑 커스텀 로그인 페이지 렌더링
+app.get('/admin/login', (req, res) => {
+  if (req.cookies.auth_token === 'authenticated') {
+    return res.redirect('/admin');
+  }
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>해우렌탈 로그인</title>
+      <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+      <style>
+        :root { --primary-color: #03c75a; --bg-color: #f2f4f6; }
+        * { box-sizing: border-box; font-family: 'Pretendard Variable', sans-serif; }
+        body { background: var(--bg-color); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-box { background: #fff; padding: 40px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); width: 100%; max-width: 360px; text-align: center; }
+        h2 { margin-bottom: 24px; color: #191f28; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 14px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 15px; outline: none; transition: 0.2s; }
+        input[type="text"]:focus, input[type="password"]:focus { border-color: var(--primary-color); }
+        .options { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; font-size: 14px; color: #666; }
+        .options label { display: flex; align-items: center; cursor: pointer; }
+        .options input[type="checkbox"] { margin-right: 6px; }
+        button { width: 100%; padding: 16px; background: var(--primary-color); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        button:hover { background: #02b350; }
+      </style>
+    </head>
+    <body>
+      <div class="login-box">
+        <h2>관리자 로그인</h2>
+        <form action="/admin/login" method="POST">
+          <input type="text" name="id" placeholder="아이디" required>
+          <input type="password" name="pw" placeholder="비밀번호" required>
+          <div class="options">
+            <label><input type="checkbox" name="remember" value="true" checked> 자동 로그인 (30일 유지)</label>
+          </div>
+          <button type="submit">로그인</button>
+        </form>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// 🔑 로그인 요청 처리 라우터
+app.post('/admin/login', (req, res) => {
+  const { id, pw, remember } = req.body;
+  
+  if (id === ADMIN_ID && pw === ADMIN_PW) {
+    const cookieOptions = { httpOnly: true };
+    // 자동 로그인을 체크했다면 쿠키 수명을 30일로 설정, 안 했으면 브라우저 종료 시 삭제
+    if (remember === 'true') {
+      cookieOptions.maxAge = 30 * 24 * 60 * 60 * 1000; 
+    }
+    res.cookie('auth_token', 'authenticated', cookieOptions);
+    res.redirect('/admin');
+  } else {
+    res.send(`<script>alert('아이디 또는 비밀번호가 틀렸습니다.'); window.location.href='/admin/login';</script>`);
+  }
+});
+
+// 🔑 로그아웃 처리
+app.get('/admin/logout', (req, res) => {
+  res.clearCookie('auth_token');
+  res.redirect('/admin/login');
+});
+
+// ==========================================
+// 🎨 [관리자 페이지 라우터] - requireAuth로 보호됨
+// ==========================================
+app.get('/admin', requireAuth, (req, res) => {
   const html = `
     <!DOCTYPE html>
     <html lang="ko">
@@ -151,9 +226,10 @@ app.get('/admin', (req, res) => {
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard Variable', sans-serif; }
         body { background-color: var(--bg-color); color: var(--text-primary); -webkit-font-smoothing: antialiased; display: flex; justify-content: center; padding: 20px; }
         .container { width: 100%; max-width: 600px; }
-        .header { margin-bottom: 24px; margin-top: 20px; text-align: center; }
-        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+        .header { margin-bottom: 24px; margin-top: 20px; text-align: center; position: relative; }
+        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; cursor: pointer; user-select: none; }
         .header p { color: var(--text-secondary); margin-top: 6px; font-size: 14px; }
+        .logout-btn { position: absolute; right: 0; top: 0; font-size: 12px; color: #888; text-decoration: none; padding: 6px 12px; background: #e9ecef; border-radius: 8px; }
         .section { background: var(--card-bg); border-radius: var(--border-radius); padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); margin-bottom: 20px; }
         .section-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; color: var(--text-primary); }
         .form-group { margin-bottom: 0; }
@@ -162,8 +238,8 @@ app.get('/admin', (req, res) => {
         .btn-submit { width: 100%; background: var(--primary-color); color: white; border: none; border-radius: 14px; padding: 18px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.2s; margin-bottom: 30px; }
         .btn-submit:active { background: #02b350; transform: scale(0.98); }
         
-        /* ⭐️ 모바일 친화적 토글 스위치 디자인 */
-        .toggle-container { display: flex; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 16px; border-radius: 12px; }
+        /* 토글 스위치 디자인 */
+        .toggle-container { display: flex; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 16px; border-radius: 12px; margin-bottom: 10px; }
         .toggle-text strong { display: block; font-size: 15px; margin-bottom: 4px; color: #222; }
         .toggle-text span { font-size: 12px; color: var(--text-secondary); }
         .switch { position: relative; display: inline-block; width: 56px; height: 32px; flex-shrink: 0; }
@@ -172,18 +248,24 @@ app.get('/admin', (req, res) => {
         .slider:before { position: absolute; content: ""; height: 24px; width: 24px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
         input:checked + .slider { background-color: var(--primary-color); }
         input:checked + .slider:before { transform: translateX(24px); }
+        
+        /* ⭐️ 테스트 모드 (이스터에그) 컨테이너 (기본 숨김) */
+        #test-mode-container { display: ${testMode === 'on' ? 'flex' : 'none'}; background: #fff3cd; border: 1px solid #ffe69c; }
       </style>
     </head>
     <body>
       <div class="container">
         <div class="header">
-          <h1>해우시스템 AI 제어 센터</h1>
+          <!-- ⭐️ 이스터에그 발동을 위한 ID 추가 -->
+          <h1 id="admin-title">해우시스템 AI 제어 센터</h1>
           <p>해우렌탈 스마트 자동응답 시스템 설정</p>
+          <a href="/admin/logout" class="logout-btn">로그아웃</a>
         </div>
         <form action="/admin/update" method="POST">
           
           <div class="section">
             <div class="section-title">🤖 AI 운영 상태</div>
+            
             <div class="toggle-container">
               <div class="toggle-text">
                 <strong>AI 자동응답 켜기</strong>
@@ -191,6 +273,18 @@ app.get('/admin', (req, res) => {
               </div>
               <label class="switch">
                 <input type="checkbox" name="aiModeToggle" value="on" ${aiMode === 'on' ? 'checked' : ''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <!-- ⭐️ 이스터에그: 숨겨진 테스트 모드 영역 -->
+            <div class="toggle-container" id="test-mode-container">
+              <div class="toggle-text">
+                <strong>🛠️ 개발자 테스트 모드</strong>
+                <span>'!테스트'로 시작하는 문장에만 AI가 답변합니다.</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="testToggleInput" name="testModeToggle" value="on" ${testMode === 'on' ? 'checked' : ''}>
                 <span class="slider"></span>
               </label>
             </div>
@@ -206,16 +300,39 @@ app.get('/admin', (req, res) => {
           <button type="submit" class="btn-submit">변경사항 저장하기</button>
         </form>
       </div>
+
+      <!-- ⭐️ 이스터에그 동작 스크립트 -->
+      <script>
+        const titleEl = document.getElementById('admin-title');
+        const testContainer = document.getElementById('test-mode-container');
+        const testToggleInput = document.getElementById('testToggleInput');
+        let clickCount = 0;
+
+        titleEl.addEventListener('click', () => {
+          clickCount++;
+          const isHidden = (testContainer.style.display === 'none' || testContainer.style.display === '');
+          
+          if (isHidden && clickCount >= 8) {
+            testContainer.style.display = 'flex';
+            clickCount = 0;
+            alert('🛠️ 개발자 테스트 모드가 활성화되었습니다.');
+          } else if (!isHidden && clickCount >= 3) {
+            testContainer.style.display = 'none';
+            testToggleInput.checked = false; // 숨길 때 체크 해제
+            clickCount = 0;
+          }
+        });
+      </script>
     </body>
     </html>
   `;
   res.send(html);
 });
 
-// ⭐️ 관리자 설정 변경 라우터 (DB 동기화)
-app.post('/admin/update', async (req, res) => {
-  // 체크박스가 ON이면 'on' 반환, 해제되어 있으면 undefined이므로 'off' 처리
+// ⭐️ 관리자 설정 변경 라우터 (DB 동기화) - requireAuth로 보호됨
+app.post('/admin/update', requireAuth, async (req, res) => {
   aiMode = req.body.aiModeToggle === 'on' ? 'on' : 'off';
+  testMode = req.body.testModeToggle === 'on' ? 'on' : 'off'; // 테스트 모드 상태도 저장
   currentPrompt = req.body.promptText;
   
   try {
@@ -223,12 +340,13 @@ app.post('/admin/update', async (req, res) => {
       .from('bot_settings')
       .update({
         ai_mode: aiMode,
+        test_mode: testMode,
         current_prompt: currentPrompt
       })
       .eq('id', 1);
 
     if (error) throw error;
-    console.log(`⚙️ 관리자 설정 변경 완료 (현재 모드: ${aiMode})`);
+    console.log(`⚙️ 관리자 설정 변경 완료 (모드: ${aiMode} / 테스트: ${testMode})`);
   } catch (err) {
     console.error('❌ Supabase DB 업데이트 실패:', err.message);
   }
@@ -237,7 +355,7 @@ app.post('/admin/update', async (req, res) => {
 });
 
 // ==========================================
-// 🤖 [네이버 톡톡 웹훅] - 실전 도입 버전 (!테스트 제거, ON/OFF 적용)
+// 🤖 [네이버 톡톡 웹훅] - 실전 도입 버전
 // ==========================================
 app.post('/webhook', async (req, res) => {
   const event = req.body;
@@ -255,21 +373,24 @@ app.post('/webhook', async (req, res) => {
     }
 
     // ==========================================
-    // 🔍 [테스트 모드 보관소] - 필요 시 주석(/* ... */)을 해제하세요.
+    // 🔍 [테스트 모드 로직] 
     // ==========================================
-    
-    if (!userMessage.startsWith('!테스트')) {
-      return; // '!테스트'로 시작하지 않는 메시지는 무시
+    let realMessage = userMessage;
+
+    // 테스트 모드가 'on'일 때의 방어막
+    if (testMode === 'on') {
+      if (!userMessage.startsWith('!테스트')) {
+        console.log('🚫 [테스트 모드 활성화 중] 일반 고객의 메시지 무시됨');
+        return; 
+      }
+      // AI에게 프롬프트를 넘길 때는 '!테스트' 글자를 지우고 진짜 내용만 전달
+      realMessage = userMessage.replace(/^!테스트\s*/, '').trim();
     }
-    const realMessage = userMessage.replace('!테스트', '').trim();
-    
 
-    // ⭐️ [수정] '!테스트' 검사 로직 삭제 -> 모든 고객 메시지 수신
-    //const realMessage = userMessage; 
-
-    // ⭐️ [수정] 심플 ON/OFF 로직
-    // aiMode가 'on'일 때만 작동 (영업시간 외 AI 응대 모드)
-    // 'off'일 때는 아무것도 하지 않음 (관리자 수동 응대 모드)
+    // ==========================================
+    // ⭐️ 기본 AI 동작 ON/OFF 로직
+    // ==========================================
+    // aiMode가 'off'이면 어떠한 응답도 하지 않음
     if (aiMode !== 'on') {
       console.log(`⏸️ AI 모드 OFF 상태. 응답 무시.`);
       return; 
@@ -280,6 +401,7 @@ app.post('/webhook', async (req, res) => {
       chatMemory[userHash] = []; 
     }
 
+    // 테스트 글자를 떼어낸 'realMessage'를 기억소자(DB)에 넣음
     chatMemory[userHash].push({ role: "user", content: realMessage });
 
     if (chatMemory[userHash].length > 6) {
@@ -326,6 +448,6 @@ app.listen(3000, async () => {
   console.log('==============================================');
   console.log('🚀 해우렌탈 최종 실전 서버 구동 중...');
   await loadSettingsFromDB(); 
-  console.log(`👉 http://localhost:3000/admin (ID: ${ADMIN_ID})`);
+  console.log(`👉 http://localhost:3000/admin`);
   console.log('==============================================');
 });
