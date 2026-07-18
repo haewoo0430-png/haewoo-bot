@@ -387,13 +387,35 @@ app.post('/webhook', async (req, res) => {
       realMessage = userMessage.replace(/^!테스트\s*/, '').trim();
     }
 
+// ==========================================
+    // 🔍 [응답 조건 로직: 우선순위 1.AI모드 / 2.개발자모드]
     // ==========================================
-    // ⭐️ 기본 AI 동작 ON/OFF 로직
-    // ==========================================
-    // aiMode가 'off'이면 어떠한 응답도 하지 않음
-    if (aiMode !== 'on') {
-      console.log(`⏸️ AI 모드 OFF 상태. 응답 무시.`);
-      return; 
+    let realMessage = userMessage;
+
+    if (aiMode === 'on') {
+      // [조건 1 & 2] AI 모드 ON: 개발자 모드 상태와 무관하게 모든 문의에 응답
+      console.log(`✅ [AI 모드 ON] 고객 메시지 수신 처리 중...`);
+      
+      // (편의 기능) AI 모드가 ON일 때 대표님이 습관적으로 '!테스트'를 치더라도 정상 답변하도록 처리
+      if (userMessage.startsWith('!테스트')) {
+        realMessage = userMessage.replace(/^!테스트\s*/, '').trim();
+      }
+    } else {
+      // [조건 3 & 4] AI 모드 OFF
+      if (testMode === 'on') {
+        // [조건 3] AI 모드 OFF, 개발자 모드 ON: '!테스트' 입력 시에만 동작
+        if (!userMessage.startsWith('!테스트')) {
+          console.log(`🚫 [AI OFF / 테스트 ON] 일반 고객 메시지 완벽 방어`);
+          return; // 일반 문의 차단
+        }
+        // '!테스트'가 확인되면 글자를 떼어내고 통과
+        realMessage = userMessage.replace(/^!테스트\s*/, '').trim();
+        console.log(`🛠️ [AI OFF / 테스트 ON] 개발자 테스트 명령어 인식 완료`);
+      } else {
+        // [조건 4] AI 모드 OFF, 개발자 모드 OFF: 모든 문의 무시
+        console.log(`⏸️ [AI OFF / 테스트 OFF] 시스템 대기 상태. 모든 메시지 무시`);
+        return; // 완전 차단
+      }
     }
 
     // --- 대화 기억(Memory) 로직 ---
