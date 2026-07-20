@@ -334,6 +334,12 @@ app.post('/admin/update', requireAuth, async (req, res) => {
   aiMode = req.body.aiModeToggle === 'on' ? 'on' : 'off';
   testMode = req.body.testModeToggle === 'on' ? 'on' : 'off'; // 테스트 모드 상태도 저장
   currentPrompt = req.body.promptText;
+
+  // ▼ 🚨 [진단용 로그 추가] 서버가 뭘로 통신하는지 까보기
+  console.log('--- 🚨 DB 연결 진단 로그 🚨 ---');
+  console.log('1. 현재 통신 URL:', process.env.SUPABASE_URL);
+  console.log('2. 현재 KEY 길이:', process.env.SUPABASE_ANON_KEY ? process.env.SUPABASE_ANON_KEY.length : '없음');
+  console.log('---------------------------------');
   
   try {
     const { error } = await supabase
@@ -349,6 +355,8 @@ app.post('/admin/update', requireAuth, async (req, res) => {
     console.log(`⚙️ 관리자 설정 변경 완료 (모드: ${aiMode} / 테스트: ${testMode})`);
   } catch (err) {
     console.error('❌ Supabase DB 업데이트 실패:', err.message);
+    // 어떤 상세 에러인지 더 자세히 출력
+    console.error('상세 에러 내역:', err);
   }
 
   res.redirect('/admin'); 
